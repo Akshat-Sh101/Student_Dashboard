@@ -7,14 +7,17 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.linear_model import LinearRegression
 import pandas as pd
 import requests
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = "secret"
 
 dataset = load_dataset("fazni/roles-based-on-skills")
-skill_data = dataset['train']  # Ensure this is the correct split (train/test/validation)
+skill_data = dataset['train']  
 
-# Extract the list of skills
 dataset_skills = [item['Role'] for item in skill_data]
 
 def connect_db():
@@ -244,7 +247,6 @@ def rate_skills():
     db = connect_db()
     cursor = db.cursor(dictionary=True)
 
-    # Retrieve current skills of the student
     cursor.execute("SELECT skill FROM Skills WHERE student_id = %s", (student_id,))
     user_skills = [row["skill"] for row in cursor.fetchall()]
 
@@ -254,19 +256,16 @@ def rate_skills():
     if not user_skills:
         return jsonify({"message": "No skills found for the student"}), 404
 
-    # Create skill embeddings (simple one-hot encoding for similarity comparison)
     skill_vectors = {skill: np.zeros(len(dataset_skills)) for skill in dataset_skills}
     
     for i, skill in enumerate(dataset_skills):
         skill_vectors[skill][i] = 1
 
-    # Compute similarity scores
     user_vectors = np.mean([skill_vectors.get(skill, np.zeros(len(dataset_skills))) for skill in user_skills], axis=0)
     similarity_scores = {skill: cosine_similarity([user_vectors], [skill_vectors[skill]])[0][0] for skill in dataset_skills}
 
-    # Sort skills based on similarity and exclude existing skills
     suggested_skills = sorted(similarity_scores, key=similarity_scores.get, reverse=True)
-    suggested_skills = [skill for skill in suggested_skills if skill not in user_skills][:5]  # Top 5 new skills
+    suggested_skills = [skill for skill in suggested_skills if skill not in user_skills][:5]  
 
     return jsonify({
         "current_skills": user_skills,
@@ -275,7 +274,7 @@ def rate_skills():
 
 
 HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/tiiuae/falcon-7b-instruct"
-HEADERS = {"Authorization": "Bearer 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"}  
+HEADERS = {"Authorization": f"Bearer {os.getenv('HUGGINGFACE_API_KEY')}"}
 
 @app.route('/generate_roadmap', methods=['POST'])
 def generate_roadmap():
@@ -285,22 +284,20 @@ def generate_roadmap():
     if not skill:
         return jsonify({"error": "Missing skill"}), 400
 
-    # ✅ AI Prompt
     prompt = f"Create a detailed learning roadmap for mastering {skill}."
 
     try:
-        # ✅ Send request
         response = requests.post(HUGGINGFACE_API_URL, headers=HEADERS, json={
             "inputs": prompt,
-            "parameters": {"max_new_tokens": 500},  # Prevent excessive output
+            "parameters": {"max_new_tokens": 500}, 
             "options": {"wait_for_model": True}  # Fix cold-start issues
         })
 
-        # ✅ Check for errors
+        
         if response.status_code != 200:
             return jsonify({"error": f"API Error: {response.status_code}, {response.text}"}), 500
 
-        # ✅ Parse response safely
+        
         response_json = response.json()
         if not response_json or not isinstance(response_json, list):
             return jsonify({"error": "Invalid response format"}), 500
